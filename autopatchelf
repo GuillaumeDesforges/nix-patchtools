@@ -46,16 +46,21 @@ autoPatchBinary()
     echo "Auto patching ELF binary: $binary" >&2
 
     local binaryArch=$(guessArch "$binary")
-
+    
     # For each needed library, look for a package that provides and compose an RPATH string for all the paths
-
     local archSpecificSearchPathVariable="${searchPathVariable}_${binaryArch}"
-
+    local originalRpath=$(patchelf --print-rpath "$binary")
     local neededLibraries=$(patchelf --print-needed "$binary")
-    local searchLibraryPaths="$(dirname "$binary"):${!archSpecificSearchPathVariable}:${!searchPathVariable}"
 
-    local rpath=
+    # Resolve $ORIGIN in original RPATH
+    local resolvedOriginalRpath=${originalRpath//\$ORIGIN/$(dirname "$binary")}
 
+    # Include the original RPATH in the search paths
+    local searchLibraryPaths="$(dirname "$binary"):$resolvedOriginalRpath:${!archSpecificSearchPathVariable}:${!searchPathVariable}"
+
+    local newRpath=
+    declare -A uniqueLibPaths
+	
     for lib in $neededLibraries
     do
         local foundLibPath=
@@ -74,10 +79,10 @@ autoPatchBinary()
                     if [ "$foundLibArch" = "$binaryArch" ]
                     then
                         foundLibPath="$libPath"
+                        break
                     else
                         echo "WARNING: candidate library found but has architecture: $foundLibArch, while the binary has: $binaryArch" >&2
                     fi
-                    break
                 fi
             done
             unset IFS
@@ -88,16 +93,19 @@ autoPatchBinary()
             echo "No package found that provides library: $lib" >&2
             exit 1
         else
-            rpath="$rpath${rpath:+:}$foundLibPath"
+            if [ -z "${uniqueLibPaths[$foundLibPath]}" ]; then
+                uniqueLibPaths[$foundLibPath]=1
+                newRpath="$newRpath${newRpath:+:}$foundLibPath"
+            fi
         fi
     done
 
-    # Patch the binary's RPATH to allow it to find the needed libraries
+    local finalRpath="$originalRpath${newRpath:+:}$newRpath"
 
-    if [ "$rpath" != "" ]
+    if [ "$finalRpath" != "" ]
     then
-        echo "Setting RPATH to: $rpath" >&2
-        patchelf --set-rpath "$rpath" "$binary"
+        echo "Setting RPATH to: $finalRpath" >&2
+        patchelf --set-rpath "$finalRpath" "$binary"
     fi
 
     # Check whether the binary requires a program interpreter, and if so, patch it
