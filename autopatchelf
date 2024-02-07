@@ -179,7 +179,7 @@ then
         findParam="-maxdepth 1"
     fi
 
-    find "$pathParam" $findParam -type f | while read binary
+    find "$pathParam" $findParam -type f -executable | while read binary
     do
         if file $binary | grep -q "^$binary: ELF"
         then
